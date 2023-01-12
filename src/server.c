@@ -6315,6 +6315,9 @@ int main(int argc, char **argv) {
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(argv[0],"redis-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
+    else if (strstr(argv[0],"redis-merge-rdb") != NULL)
+        redis_merge_rdb_main(argc,argv);
+
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */

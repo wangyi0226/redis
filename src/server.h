@@ -49,7 +49,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <lua.h>
-#include <signal.h>
+#include <signal.h>n
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
@@ -2432,10 +2432,11 @@ void loadSentinelConfigFromQueue(void);
 void sentinelIsRunning(void);
 void sentinelCheckConfigFile(void);
 
-/* redis-check-rdb & aof */
+/* redis-check-rdb & aof & redis-merge-rdb */
 int redis_check_rdb(char *rdbfilename, FILE *fp);
 int redis_check_rdb_main(int argc, char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
+int redis_merge_rdb_main(int argc,char **argv);
 
 /* Scripting */
 void scriptingInit(int setup);
@@ -2444,6 +2445,7 @@ void ldbKillForkedSessions(void);
 int ldbPendingChildren(void);
 sds luaCreateFunction(client *c, lua_State *lua, robj *body);
 void freeLuaScriptsAsync(dict *lua_scripts);
+lua_State * newLuaState();
 
 /* Blocked clients */
 void processUnblockedClients(void);

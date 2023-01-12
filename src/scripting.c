@@ -1274,6 +1274,27 @@ void luaSetAllowListProtection(lua_State *lua) {
     lua_setmetatable(lua, -2);
 }
 
+lua_State * newLuaState(){
+    lua_State *lua = lua_open();
+    luaopen_base(lua);
+    luaL_openlibs(lua);
+    luaopen_cjson(lua);
+    luaopen_bit(lua);
+
+    lua_getglobal(lua,"math");
+    lua_pushstring(lua,"random");
+    lua_pushcfunction(lua,redis_math_random);
+    lua_settable(lua,-3);
+
+    lua_pushstring(lua,"randomseed");
+    lua_pushcfunction(lua,redis_math_randomseed);
+    lua_settable(lua,-3);
+
+    lua_setglobal(lua,"math");
+
+    return lua;
+}
+
 /* Initialize the scripting environment.
  *
  * This function is called the first time at server startup with
@@ -1339,7 +1360,6 @@ void scriptingInit(int setup) {
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"LOG_NOTICE");
-    lua_pushnumber(lua,LL_NOTICE);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"LOG_WARNING");
