@@ -165,7 +165,7 @@ robj *luaGetStringObj(lua_State *lua,int index){
     check_lua_type(lua,index,LUA_TSTRING)
     size_t len;
     char *s;
-    s = (char*)lua_tolstring(lua,1,&len);
+    s = (char*)lua_tolstring(lua,index,&len);
     if(s==NULL || len ==0 ){
         luaError(lua, "wrong value of arguments %d,strlen:%d",index,len);
     }
@@ -175,7 +175,7 @@ sds luaGetSds(lua_State *lua,int index){
     check_lua_type(lua,index,LUA_TSTRING)
     size_t len;
     char *s;
-    s = (char*)lua_tolstring(lua,1,&len);
+    s = (char*)lua_tolstring(lua,index,&len);
     if(s==NULL || len ==0 ){
         luaError(lua, "wrong value of arguments %d,strlen:%d",index,len);
     }
@@ -186,7 +186,7 @@ char *luaGetString(lua_State *lua,int index){
     check_lua_type(lua,index,LUA_TSTRING)
     size_t len;
     char *s;
-    s = (char*)lua_tolstring(lua,1,&len);
+    s = (char*)lua_tolstring(lua,index,&len);
     if(s==NULL || len ==0 ){
         luaError(lua, "wrong value of arguments %d,strlen:%d",index,len);
     }
