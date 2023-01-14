@@ -3152,9 +3152,24 @@ void makeThreadKillable(void) {
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 }
 
-void initServer(void) {
+void initServerDB(void){
+    /* Create the Redis databases, and initialize other internal state. */
     int j;
+    for (j = 0; j < server.dbnum; j++) {
+        server.db[j].dict = dictCreate(&dbDictType,NULL);
+        server.db[j].expires = dictCreate(&dbExpiresDictType,NULL);
+        server.db[j].expires_cursor = 0;
+        server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
+        server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
+        server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
+        server.db[j].id = j;
+        server.db[j].avg_ttl = 0;
+        server.db[j].defrag_later = listCreate();
+        listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
+    }
+}
 
+void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
@@ -3249,19 +3264,7 @@ void initServer(void) {
         exit(1);
     }
 
-    /* Create the Redis databases, and initialize other internal state. */
-    for (j = 0; j < server.dbnum; j++) {
-        server.db[j].dict = dictCreate(&dbDictType,NULL);
-        server.db[j].expires = dictCreate(&dbExpiresDictType,NULL);
-        server.db[j].expires_cursor = 0;
-        server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
-        server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
-        server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
-        server.db[j].id = j;
-        server.db[j].avg_ttl = 0;
-        server.db[j].defrag_later = listCreate();
-        listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
-    }
+    initServerDB();
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = dictCreate(&keylistDictType,NULL);
