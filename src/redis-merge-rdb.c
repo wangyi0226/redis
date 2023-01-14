@@ -567,6 +567,58 @@ int luaRdbLTrim(lua_State *lua) {
     return 0;
 }
 
+int luaRdbSAdd(lua_State *lua) {
+    robj *key,*set;
+    sds val;
+    redisDb *db;
+    luaRdbCheckDBAndKey(lua,&db,&key);
+    set = lookupKeyWrite(db,key);
+    val = luaGetSds(lua,3);
+    if(set == NULL){
+        set=createSetObject();
+        dbAdd(db,key,set);
+    }
+    setTypeAdd(set,val);
+    return 0;
+}
+
+int luaRdbSRem(lua_State *lua) {
+    robj *key,*set;
+    sds val;
+    redisDb *db;
+    set=luaRdbCheckDBAndKeyExist(lua,&db,&key);
+    val = luaGetSds(lua,3);
+    setTypeRemove(set,val);
+    return 0;
+}
+
+int luaRdbZAdd(lua_State *lua) {
+    robj *key,*zset;
+    sds zkey;
+    double  score,new_score;
+    int in_flags=ZADD_IN_NONE,out_flags;
+    redisDb *db;
+    luaRdbCheckDBAndKey(lua,&db,&key);
+    zset = lookupKeyWrite(db,key);
+    if(zset == NULL){
+        zset=createZsetObject();
+        dbAdd(db,key,zset);
+    }
+    score=(double)luaL_checknumber(lua,3);
+    zkey = luaGetSds(lua,4);
+    zsetAdd(zset,score, zkey,in_flags,&out_flags,&new_score);
+    return 0;
+}
+
+int luaRdbZRem(lua_State *lua) {
+    robj *key,*zset;
+    sds val;
+    redisDb *db;
+    zset=luaRdbCheckDBAndKeyExist(lua,&db,&key);
+    val = luaGetSds(lua,3);
+    zsetDel(zset,val);
+    return 0;
+}
 int luaRdbDeleteKey(lua_State *lua) {
     int dbid = luaL_checkint(lua,1);
     robj *key = luaGetStringObj(lua,2);
@@ -761,6 +813,27 @@ int redis_merge_rdb_main(int argc, char **argv) {
     lua_pushstring(lua, "ltrim");
     lua_pushcfunction(lua, luaRdbLTrim);
     lua_settable(lua, -3);
+
+    //rdb.sadd
+    lua_pushstring(lua, "sadd");
+    lua_pushcfunction(lua, luaRdbSAdd);
+    lua_settable(lua, -3);
+
+    //rdb.srem
+    lua_pushstring(lua, "srem");
+    lua_pushcfunction(lua, luaRdbSRem);
+    lua_settable(lua, -3);
+
+    //rdb.zadd
+    lua_pushstring(lua, "zadd");
+    lua_pushcfunction(lua, luaRdbZAdd);
+    lua_settable(lua, -3);
+
+    //rdb.zrem
+    lua_pushstring(lua, "zrem");
+    lua_pushcfunction(lua, luaRdbZRem);
+    lua_settable(lua, -3);
+
 
     //rdb.delete
     lua_pushstring(lua, "delete");
