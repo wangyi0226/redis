@@ -216,7 +216,7 @@ int luaImportRdbFile(lua_State *lua) {
     return 0;
 }
 
-robj* luaMergeCallBack(lua_State *lua,uint64_t dbid, robj *key, robj *val,robj *old) {
+robj* luaMergeCallBack(lua_State *lua,uint64_t dbid, robj *key, robj *val,robj *old,char **new_key) {
     lua_pushvalue(lua,2);
     lua_pushinteger(lua,dbid);
     lua_pushstring(lua,key->ptr);
@@ -226,8 +226,11 @@ robj* luaMergeCallBack(lua_State *lua,uint64_t dbid, robj *key, robj *val,robj *
     }else{
         lua_pushlightuserdata(lua,old);
     }
-    lua_call(lua,4,1);
-    robj *ret=lua_touserdata(lua,-1);
+    lua_call(lua,4,2);
+    robj *ret=lua_touserdata(lua,-2);
+    if(lua_isstring(lua,-1)){
+        (*new_key)=luaL_checkstring(lua,-1);
+    }
     lua_pop(lua,1);
     return ret;
 }
@@ -356,8 +359,14 @@ int luaMergeRdbFile(lua_State *lua) {
             already_expired++;
         }else{
             robj *ret=NULL;
+            char *newkey=NULL;
             old=lookupKeyRead(db,key);
-            ret=luaMergeCallBack(lua,dbid,key,val,old);
+            ret=luaMergeCallBack(lua,dbid,key,val,old,&newkey);
+            if(newkey!=NULL){
+                decrRefCount(key);
+                key=createStringObject(newkey,strlen(newkey));
+                old= lookupKeyRead(db,key);
+            }
             if(ret != NULL){
                 if(old==NULL){
                     dbAdd(db,key,val);
@@ -468,11 +477,25 @@ robj *luaRdbCheckDBAndKeyExist(lua_State *lua,redisDb **db,robj **key) {
     *db=&server.db[dbid];
     val= lookupKeyWrite(*db,*key);
     if(val == NULL){
+        freeStringObject(*key);
+        (*key)=NULL;
         luaError(lua,"db[%d] not found key:%s",dbid,key);
     }
     return val;
 }
 
+int luaRdbGet(lua_State *lua) {
+    robj *key,*val;
+    redisDb *db;
+    luaRdbCheckDBAndKey(lua,&db,&key);
+    val=lookupKeyWrite(db,key);
+    decrRefCount(key);
+    if(val==NULL){
+        return 0;
+    }
+    lua_pushlightuserdata(lua,val);
+    return 1;
+}
 
 int luaRdbSet(lua_State *lua) {
     robj *key,*val;
@@ -492,6 +515,8 @@ int luaRdbHSet(lua_State *lua) {
     if (h == NULL) {
         h = createHashObject();
         dbAdd(db,key,h);
+    }else{
+        decrRefCount(key);
     }
     field=luaGetSds(lua,3);
     hval=luaGetSds(lua,4);
@@ -508,6 +533,8 @@ int luaRdbHDel(lua_State *lua) {
     field=luaGetSds(lua,3);
 
     hashTypeDelete(h,field);
+    sdsfree(field);
+    decrRefCount(key);
     return 0;
 }
 
@@ -519,6 +546,8 @@ int luaRdbListPush(lua_State *lua,int where) {
     if (list == NULL) {
         list = createQuicklistObject();
         dbAdd(db,key,list);
+    }else{
+        decrRefCount(key);
     }
     val=luaGetStringObj(lua,3);
     listTypePush(list,val,where);
@@ -564,6 +593,7 @@ int luaRdbLTrim(lua_State *lua) {
     if (listTypeLength(list) == 0) {
         dbDelete(db,key);
     }
+    decrRefCount(key);
     return 0;
 }
 
@@ -589,6 +619,7 @@ int luaRdbSRem(lua_State *lua) {
     set=luaRdbCheckDBAndKeyExist(lua,&db,&key);
     val = luaGetSds(lua,3);
     setTypeRemove(set,val);
+    sdsfree(val);
     return 0;
 }
 
@@ -617,6 +648,7 @@ int luaRdbZRem(lua_State *lua) {
     zset=luaRdbCheckDBAndKeyExist(lua,&db,&key);
     val = luaGetSds(lua,3);
     zsetDel(zset,val);
+    sdsfree(val);
     return 0;
 }
 int luaRdbDeleteKey(lua_State *lua) {
@@ -626,6 +658,7 @@ int luaRdbDeleteKey(lua_State *lua) {
         luaError(lua,"wrong dbid:%d",dbid);
     }
     dbSyncDelete(&server.db[dbid],key);
+    decrRefCount(key);
     return 0;
 }
 
@@ -642,6 +675,7 @@ int luaRdbExpire(lua_State *lua) {
     }
     dictEntry *de = dictAddOrFind(server.db[dbid].expires,key);
     dictSetSignedIntegerVal(de,expiretime*1000);
+    decrRefCount(keyobj);
     return 0;
 }
 
@@ -782,6 +816,11 @@ int redis_merge_rdb_main(int argc, char **argv) {
     //rdb.save
     lua_pushstring(lua, "export");
     lua_pushcfunction(lua, luaExportRdbFile);
+    lua_settable(lua, -3);
+
+    //rdb.get
+    lua_pushstring(lua, "get");
+    lua_pushcfunction(lua, luaRdbGet);
     lua_settable(lua, -3);
 
     //rdb.set
