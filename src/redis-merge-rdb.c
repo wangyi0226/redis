@@ -501,6 +501,7 @@ int luaRdbSet(lua_State *lua) {
     robj *key,*val;
     redisDb *db;
     luaRdbCheckDBAndKey(lua,&db,&key);
+    decrRefCount(key);
     val=luaGetStringObj(lua,3);
     dbAdd(db,key,val);
     return 0;
@@ -803,7 +804,7 @@ int redis_merge_rdb_main(int argc, char **argv) {
     //rdb
     lua_newtable(lua);
 
-    //rdb.load
+    //rdb.import
     lua_pushstring(lua, "import");
     lua_pushcfunction(lua, luaImportRdbFile);
     lua_settable(lua, -3);
@@ -813,7 +814,7 @@ int redis_merge_rdb_main(int argc, char **argv) {
     lua_pushcfunction(lua, luaMergeRdbFile);
     lua_settable(lua, -3);
 
-    //rdb.save
+    //rdb.export
     lua_pushstring(lua, "export");
     lua_pushcfunction(lua, luaExportRdbFile);
     lua_settable(lua, -3);
