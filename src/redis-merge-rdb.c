@@ -70,7 +70,7 @@ static ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len) {
     return len;
 }
 
-int mergeRdbSave(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
+int rdbExport(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     dictIterator *di = NULL;
     dictEntry *de;
     char magic[10];
@@ -440,7 +440,7 @@ int luaExportRdbFile(lua_State *lua) {
     }
     rioInitWithFile(&rdb,fp);
 
-    if (mergeRdbSave(&rdb,&error,RDBFLAGS_NONE,NULL) == C_ERR) {
+    if (rdbExport(&rdb,&error,RDBFLAGS_NONE,NULL) == C_ERR) {
         errno = error;
         goto werr;
     }
