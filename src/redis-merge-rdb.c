@@ -34,6 +34,7 @@ void initServerDB(void);
 int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveAuxField(rio *rdb, void *key, size_t keylen, void *val, size_t vallen);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
+size_t objectComputeSize(robj *o, size_t sample_size);
 
 void initMergeServer(void) {
     //init config
@@ -231,7 +232,7 @@ robj* luaMergeCallBack(lua_State *lua,uint64_t dbid, robj *key, robj *val,robj *
     if(lua_isstring(lua,-1)){
         (*new_key)=luaL_checkstring(lua,-1);
     }
-    lua_pop(lua,1);
+    lua_pop(lua,2);
     return ret;
 }
 
@@ -418,6 +419,166 @@ int luaMergeRdbFile(lua_State *lua) {
         }
     }
     fclose(fp);
+    printf("Done loading RDB file %s, keys loaded: %d, keys expired: %d, keys already expired:%d \n",filename,keys, expires,already_expired);
+    return 0;
+
+eoferr:
+    if(fp)fclose(fp);
+    luaError(lua,"RDB file %s was saved with checksum disabled: no check performed.",filename);
+    return 0;
+}
+
+void luaScanCallBack(lua_State *lua,uint64_t dbid, robj *key, robj *val) {
+    lua_pushvalue(lua,2);//push function
+
+    lua_pushinteger(lua,dbid);
+    lua_pushstring(lua,key->ptr);
+    lua_pushlightuserdata(lua,val);
+    lua_call(lua,3,0);
+    return;
+}
+
+int luaScanRdbFile(lua_State *lua) {
+    if (lua_gettop(lua) != 2) {
+        luaError(lua, "wrong number of arguments");
+        return 0;
+    }
+    if (lua_type(lua,2) != LUA_TFUNCTION) {
+        luaError(lua, "wrong type of arguments");
+        return 0;
+    }
+    char *filename= luaGetString(lua,1) ;
+    printf("scan rdb file: %s\n",filename);
+    FILE *fp;
+    rio rdb;
+    uint64_t dbid;
+    int type, rdbver;
+    char buf[1024];
+    long long expiretime, now = mstime();
+
+    if ((fp = fopen(filename,"r")) == NULL){
+        luaError(lua,"Failed opening the RDB file %s : %s ",filename,strerror(errno));
+        return 0;
+    }
+    startLoadingFile(fp, filename, RDBFLAGS_NONE);
+    rioInitWithFile(&rdb,fp);
+    rdb.update_cksum = rdbLoadProgressCallback;
+    if (rioRead(&rdb,buf,9) == 0) goto eoferr;
+    buf[9] = '\0';
+    if (memcmp(buf,"REDIS",5) != 0) {
+        fclose(fp);
+        luaError(lua,"Wrong signature trying to load DB from file");
+        return 0;
+    }
+    rdbver = atoi(buf+5);
+    if (rdbver < 1 || rdbver > RDB_VERSION) {
+        fclose(fp);
+        luaError(lua,"Can't handle RDB format version %d",rdbver);
+        return 0;
+    }
+
+    expiretime = -1;
+    int keys=0,already_expired=0,expires=0;
+    while(1) {
+        robj *key, *val;
+        if ((type = rdbLoadType(&rdb)) == -1)goto eoferr;
+
+        if (type == RDB_OPCODE_EXPIRETIME) {
+            expiretime = rdbLoadTime(&rdb);
+            expiretime *= 1000;
+            if (rioGetReadError(&rdb)) goto eoferr;
+            continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_EXPIRETIME_MS) {
+            /* EXPIRETIME_MS: milliseconds precision expire times introduced
+            * with RDB v3. Like EXPIRETIME but no with more precision. */
+            expiretime = rdbLoadMillisecondTime(&rdb, rdbver);
+            if (rioGetReadError(&rdb)) goto eoferr;
+            continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_FREQ) {
+            /* FREQ: LFU frequency. */
+            uint8_t byte;
+            if (rioRead(&rdb,&byte,1) == 0) goto eoferr;
+            continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_IDLE) {
+            /* IDLE: LRU idle time. */
+            if (rdbLoadLen(&rdb,NULL) == RDB_LENERR) goto eoferr;
+            continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_EOF) {
+            /* EOF: End of file, exit the main loop. */
+            break;
+        } else if (type == RDB_OPCODE_SELECTDB) {
+            /* SELECTDB: Select the specified database. */
+            if ((dbid = rdbLoadLen(&rdb,NULL)) == RDB_LENERR)
+                goto eoferr;
+            printf("Scan DB ID %llu\n", (unsigned long long)dbid);
+            continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_RESIZEDB) {
+            uint64_t db_size, expires_size;
+            if ((db_size = rdbLoadLen(&rdb,NULL)) == RDB_LENERR)
+                goto eoferr;
+            if ((expires_size = rdbLoadLen(&rdb,NULL)) == RDB_LENERR)
+                goto eoferr;
+            continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_AUX) {
+            robj *auxkey, *auxval;
+            if ((auxkey = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            if ((auxval = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            decrRefCount(auxkey);
+            decrRefCount(auxval);
+            continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_MODULE_AUX) {
+            uint64_t moduleid, when_opcode, when;
+            if ((moduleid = rdbLoadLen(&rdb,NULL)) == RDB_LENERR) goto eoferr;
+            if ((when_opcode = rdbLoadLen(&rdb,NULL)) == RDB_LENERR) goto eoferr;
+            if ((when = rdbLoadLen(&rdb,NULL)) == RDB_LENERR) goto eoferr;
+            char name[10];
+            moduleTypeNameByID(name,moduleid);
+            robj *o = rdbLoadCheckModuleValue(&rdb,name);
+            decrRefCount(o);
+            continue; /* Read type again. */
+        } else {
+            if (!rdbIsObjectType(type)) {
+                fclose(fp);
+                luaError(lua,"Invalid object type: %d", type);
+                return 0;
+            }
+        }
+        /* Read key */
+        if ((key = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+        keys++;
+        if ((val = rdbLoadObject(type,&rdb,key->ptr,NULL)) == NULL) goto eoferr;
+        /* Check if the key already expired. */
+        if (expiretime != -1 && expiretime < now){
+            already_expired++;
+        }else{
+            luaScanCallBack(lua,dbid,key,val);
+        }
+        if (expiretime != -1) expires++;
+        decrRefCount(key);
+        decrRefCount(val);
+        expiretime = -1;
+    }
+
+    /* Verify the checksum if RDB version is >= 5 */
+    if (rdbver >= 5 && server.rdb_checksum) {
+        uint64_t cksum, expected = rdb.cksum;
+        if (rioRead(&rdb, &cksum, 8) == 0) {
+            fclose(fp);
+            luaError(lua,"Unexpected EOF reading RDB file");
+            return 0;
+        }
+        memrev64ifbe(&cksum);
+        if (cksum == 0) {
+            goto eoferr;
+        } else if (cksum != expected) {
+            fclose(fp);
+            luaError(lua,"RDB CRC error");
+        } else {
+            printf("Checksum OK\n");
+        }
+    }
+
+fclose(fp);
     printf("Done loading RDB, keys loaded: %d, keys expired: %d, keys already expired:%d \n",keys, expires,already_expired);
     return 0;
 
@@ -789,6 +950,43 @@ int luaRobjMerge(lua_State *lua) {
     return 0;
 }
 
+#define OBJ_COMPUTE_SIZE_DEF_SAMPLES 99999999
+int luaRobjInfo(lua_State *lua){
+    robj *o=lua_touserdata(lua,1);
+    if (o==NULL) {
+        luaError(lua, "wrong number or type of arguments");
+        return 0;
+    }
+    size_t size=objectComputeSize(o,OBJ_COMPUTE_SIZE_DEF_SAMPLES);
+    unsigned long count=0;
+    if (o->type == OBJ_LIST) {
+        count= listTypeLength(o);
+    }else if (o->type == OBJ_SET){
+        count = setTypeSize(o);
+    }else if(o->type == OBJ_ZSET){
+        count = zsetLength(o);
+    }else if (o->type == OBJ_HASH) {
+        count = hashTypeLength(o);
+    }else{
+        //luaError(lua, "unsupport object type:%s",type_string[o->type]);
+    }
+    lua_newtable(lua);
+
+    lua_pushstring(lua,"type");
+    lua_pushstring(lua,type_string[o->type]);
+    lua_settable(lua, -3);
+
+    lua_pushstring(lua,"size");
+    lua_pushnumber(lua,size);
+    lua_settable(lua, -3);
+
+    lua_pushstring(lua,"element_count");
+    lua_pushnumber(lua,count);
+    lua_settable(lua, -3);
+
+    return 1;
+}
+
 int redis_merge_rdb_main(int argc, char **argv) {
     int ret=0;
     int i=0;
@@ -817,6 +1015,11 @@ int redis_merge_rdb_main(int argc, char **argv) {
     //rdb.export
     lua_pushstring(lua, "export");
     lua_pushcfunction(lua, luaExportRdbFile);
+    lua_settable(lua, -3);
+
+    //rdb.scan
+    lua_pushstring(lua, "scan");
+    lua_pushcfunction(lua, luaScanRdbFile);
     lua_settable(lua, -3);
 
     //rdb.get
@@ -899,6 +1102,12 @@ int redis_merge_rdb_main(int argc, char **argv) {
     lua_pushstring(lua, "merge");
     lua_pushcfunction(lua, luaRobjMerge);
     lua_settable(lua, -3);
+
+    //robj.info
+    lua_pushstring(lua, "info");
+    lua_pushcfunction(lua, luaRobjInfo);
+    lua_settable(lua, -3);
+
     lua_setglobal(lua,"robj");
 
     initMergeServer();
