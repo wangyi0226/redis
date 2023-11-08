@@ -841,6 +841,27 @@ int luaRdbExpire(lua_State *lua) {
     return 0;
 }
 
+int luaRdbHGetAll(lua_State *lua) {
+    robj *h=lua_touserdata(lua,1);
+    if(h==NULL || h->type != OBJ_HASH){
+        luaError(lua," redis obj type is not hash");
+    }
+    hashTypeIterator *hiter;
+    hiter = hashTypeInitIterator(h);
+    lua_newtable(lua);
+    while (hashTypeNext(hiter) != C_ERR) {
+        sds key, value;
+        key = hashTypeCurrentObjectNewSds(hiter, OBJ_HASH_KEY);
+        value = hashTypeCurrentObjectNewSds(hiter, OBJ_HASH_VALUE);
+        lua_pushlstring(lua,(char*)key,sdslen(key));
+        lua_pushlstring(lua,(char*)value,sdslen(value));
+        lua_settable(lua, -3);
+    }
+    hashTypeReleaseIterator(hiter);
+    return 1;
+}
+
+
 int luaRobjToString(lua_State *lua) {
     robj *r=lua_touserdata(lua,1);
     if(r->type != OBJ_STRING){
@@ -1032,6 +1053,7 @@ int redis_merge_rdb_main(int argc, char **argv) {
     lua_pushcfunction(lua, luaRdbSet);
     lua_settable(lua, -3);
 
+
     //rdb.hset
     lua_pushstring(lua, "hset");
     lua_pushcfunction(lua, luaRdbHSet);
@@ -1107,6 +1129,12 @@ int redis_merge_rdb_main(int argc, char **argv) {
     lua_pushstring(lua, "info");
     lua_pushcfunction(lua, luaRobjInfo);
     lua_settable(lua, -3);
+
+    //robj.hgetall
+    lua_pushstring(lua, "hgetall");
+    lua_pushcfunction(lua, luaRdbHGetAll);
+    lua_settable(lua, -3);
+
 
     lua_setglobal(lua,"robj");
 
