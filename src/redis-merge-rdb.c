@@ -662,9 +662,9 @@ int luaRdbSet(lua_State *lua) {
     robj *key,*val;
     redisDb *db;
     luaRdbCheckDBAndKey(lua,&db,&key);
-    decrRefCount(key);
     val=luaGetStringObj(lua,3);
     dbAdd(db,key,val);
+    decrRefCount(key);
     return 0;
 }
 
@@ -677,9 +677,8 @@ int luaRdbHSet(lua_State *lua) {
     if (h == NULL) {
         h = createHashObject();
         dbAdd(db,key,h);
-    }else{
-        decrRefCount(key);
     }
+    decrRefCount(key);
     field=luaGetSds(lua,3);
     hval=luaGetSds(lua,4);
 
@@ -708,9 +707,8 @@ int luaRdbListPush(lua_State *lua,int where) {
     if (list == NULL) {
         list = createQuicklistObject();
         dbAdd(db,key,list);
-    }else{
-        decrRefCount(key);
     }
+    decrRefCount(key);
     val=luaGetStringObj(lua,3);
     listTypePush(list,val,where);
     return 0;
@@ -861,6 +859,55 @@ int luaRdbHGetAll(lua_State *lua) {
     return 1;
 }
 
+
+int luaRdbMembers(lua_State *lua) {
+    robj *r=lua_touserdata(lua,1);
+    if(r==NULL || (r->type != OBJ_LIST && r->type != OBJ_SET)){
+        luaError(lua," redis obj type is not set or list");
+    }
+    lua_newtable(lua);
+    switch (r->type) {
+        case OBJ_LIST: {
+            listTypeIterator *liter;
+            listTypeEntry lentry;
+            robj * member;
+            char *str;
+            char buf[128];
+            size_t len; 
+            liter = listTypeInitIterator(r, -1, LIST_HEAD);
+            int i=1;
+            while (listTypeNext(liter, &lentry)) {
+                member=listTypeGet(&lentry);
+                if (sdsEncodedObject(member)) {
+                    str = member->ptr;
+                    len = sdslen(str);
+                } else {
+                    len = ll2string(buf,sizeof(buf),(long) member->ptr);
+                    str = buf;
+                }
+                lua_pushlstring(lua,str,len);
+                lua_rawseti(lua,-2,i++);
+            }
+            listTypeReleaseIterator(liter);
+            break;
+        }
+        case OBJ_SET: {
+            setTypeIterator *ziter;
+            int64_t intele;
+            sds element;
+            int i=1;
+            ziter = setTypeInitIterator(r);
+            while (setTypeNext(ziter, &element, &intele) != -1) {
+                element = sdsfromlonglong(intele);
+                lua_pushlstring(lua,(char*)element,sdslen(element));
+                lua_rawseti(lua,-2,i++);
+            }
+            setTypeReleaseIterator(ziter);
+            break;
+        }
+    }
+    return 1;
+}
 
 int luaRobjToString(lua_State *lua) {
     robj *r=lua_touserdata(lua,1);
@@ -1135,7 +1182,10 @@ int redis_merge_rdb_main(int argc, char **argv) {
     lua_pushcfunction(lua, luaRdbHGetAll);
     lua_settable(lua, -3);
 
-
+    //robj.members
+    lua_pushstring(lua, "members");
+    lua_pushcfunction(lua, luaRdbMembers);
+    lua_settable(lua, -3);
     lua_setglobal(lua,"robj");
 
     initMergeServer();
